@@ -1,0 +1,1428 @@
+---
+title: "Analyzing the Effects of the 2023 Canadian Wildfires on Public Health in British
+Columbia"
+#subtitle: "A subtitle"
+thanks: "Thank you to Antonio Paez and Zehui Yin for helping with edits and advice, and instructing and educating us throughout the semester."
+author:
+- name: Hayden Ivie
+  student_number: 400448224
+- name: Chloe Butler-Stubbs
+  student_number: 400470143
+- name: Nikolas Aleksa 
+  student_number: 400498857
+- name: Michelle Cong-Bowers
+  student_number: 400400803
+- name: Cyllanie Henry
+  student_number: 400420513
+- name: Erin Naguit
+  student_number: 400373494
+- name: Shifa Valyani
+  student_number: 400391948
+- name: Yichen She
+  student_number: 400228530
+subject: "ENVSOCTY 4GA3"
+abstract: "This paper reports our analysis of cardiorespiratory related health issues in British Columbia, and its relationship with spatial proximity to wildfire locations in 2023-2024. Data were obtained from the Health Canada Portal, Open Canada Portal, and the British Columbia Air Data Archive and Healthideas Portal."
+keywords: "wildfire, cardiorespiratory, air quality, spatial analysis"
+date: "4/8/2025"
+output:
+  pdf_document:
+    # The project-template-default.tex file was minimally adapted from Steven V. Miller's template for academic manuscripts. See:
+    # http://svmiller.com/blog/2016/02/svm-r-markdown-manuscript/
+    # https://github.com/svmiller/svm-r-markdown-templates/blob/master/svm-latex-ms.tex
+    template: project-template-default.tex
+always_allow_html: true
+---
+
+<!--Chunks of code can have names; the chunk option "include" controls whether the chunk and its output are printed in the final document-->
+```{r load-packages, include=FALSE}
+library(bcmaps) # package `bcmaps` which includes boundary and other geography files for British Columbia
+library(cartogram) # Package to create cartograms
+library(dplyr) # Data Manipulator
+library(ggplot2) # package for plotting
+library(glue) # Interpreted String Literals
+library(gstat) # Spatial and Spatio-Temporal Geostatistical Modelling, Prediction and Simulation
+library(here) # A Simpler Way to Find Your Files
+library(patchwork) #Plot Combiner
+#library(plotly) # package for interactive plotting
+library(sf) # package for working with geospatial data in simple features format
+library(sp) # package for working with spatial data, including utilities to create spatial weights matrices, etc.
+library(spdep) # package for spatial regression analysis
+library(stargazer) # package for creating tables with output of models 
+library(terra) # Raster package
+library(tidyverse) # family of packages for data manipulation, analysis, and visualization (includes `ggplot2`)
+```
+
+
+```{r read-census-data, include=FALSE}
+
+PM2.5 <-read.csv(glue::glue(here::here(), "/data/PM2.5.csv"))
+
+names(PM2.5)[names(PM2.5) == "PM2.5..ug.m.3."] <- "PM2.5 (ug/m^3)"
+
+PM2.5 <- PM2.5[-c(320:420), ]
+```
+
+```{r Local Health Area Maps of British Columbia, include=FALSE}
+
+# Load and plot the boundaries of B.C.
+healthha.sf <- health_ha()
+plot(st_geometry(healthha.sf))
+
+```
+
+```{r Sort for Highest and Lowest Average Month, include=FALSE}
+#Pipe operation, where dates with no data are removed, and then the month format is reformatted to a way that the system understands, then every month is grouped and the average PM2.5 is taken. This then tells us the average PM2.5 by month, so we can take the highest and lowest. Highest would be peek wildfire season, and lowest would be period of least affect from wildfire, aka baseline.
+# Remove rows with no PM2.5
+PM2.5 %>%
+  filter(!is.na(`PM2.5 (ug/m^3)`)) %>%
+    mutate(MonthName = format(as.Date(Month, format = "%d-%b-%y"), "%b")) %>%
+  group_by(MonthName) %>%
+  summarize(Avg_PM25 = mean(`PM2.5 (ug/m^3)`, na.rm = TRUE)) %>%
+  arrange(desc(Avg_PM25))
+
+#Highest is determined to be August.
+#Lowest is determined to be April.
+
+#These both make sense, April is the beginning of wildifre season, thus most time to recover from past wildfire season. August is the peak of the summer, highest temperatures, worst fires = worst smoke and PM2.5 numbers.
+
+```
+
+```{r - Load perimeters of Wild Fire Boundaries from 2023, include=FALSE}
+#Read the the data from the temporary unzipped kml folder. Standard usage notation makes it normally doc.kml
+Fires <- read_sf(glue::glue(here::here(), "/data/BC Fire Perimeters 2023.kmz"))
+
+# Using a pipe operation, extract the polygon features from the kml and create variable contained with these polygons.
+Fires_polygons <- Fires %>%
+  st_collection_extract("POLYGON")
+#This polygon feature will be used for mapping.
+```
+
+
+```{r - July to December - PM2.5 Air Quality Points overlaid on Health Area Regional Map of British Columbia, include=FALSE}
+
+#July--------------------------------------------------------------------------------------------
+
+#Checking to see if the CRS is the same.
+st_crs(healthha.sf)  
+st_crs(PM2.5) 
+#They were not, thus we need to transform the air quality to the Albers BC projection.
+
+#First search and identify only July 1, 2023 dates.
+unique(PM2.5$Month)
+
+PM2.5$Month <- as.Date(PM2.5$Month, format = "%d-%b-%y")
+
+# Filter only for July 1, 2023
+PM2.5_July <- PM2.5 %>% filter(Month == as.Date("2023-07-01"))
+
+# Create sf object from filtered data
+PM2.5_sf_July <- st_as_sf(PM2.5_July, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed_July <- st_transform(PM2.5_sf_July, crs = 3005)
+
+# Plot the map for July 1 only
+ggplot() +
+  geom_sf(data = healthha.sf, fill = "white", color = "black")  + geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), color = "magenta", alpha = 0.3) +
+  geom_sf(data = PM2.5_Transformed_July, 
+          aes(color = `PM2.5 (ug/m^3)`), 
+          size = 2) + scale_fill_manual(name = "", values = c("2023 Wildfire Boundaries" = "magenta")) +
+  scale_color_gradient(low = "yellow", high = "red", name = "PM2.5 (ug/m³)",
+                       limits = c(0, 65)) +
+  coord_sf() +
+  labs(title = "Average PM2.5 Concentration in July, 2023",
+       subtitle = "Points represent air quality data (PM2.5) overlaid on regional map")  +
+  theme_minimal() + #makes it so the grey background is absent, overall cleaner 
+   theme(legend.position = "right") + 
+  theme_minimal() + theme(legend.position = c(1.1, 0.6))
+
+#August------------------------------------------------------------------------------------------
+
+#Checking to see if the CRS is the same.
+st_crs(healthha.sf)  
+st_crs(PM2.5) 
+#They were not, thus we need to transform the air quality to the Albers BC projection.
+
+#First search and identify only August 1, 2023 dates.
+unique(PM2.5$Month)
+
+PM2.5$Month <- as.Date(PM2.5$Month, format = "%d-%b-%y")
+
+# Filter only for August 1, 2023
+PM2.5_August <- PM2.5 %>% filter(Month == as.Date("2023-08-01"))
+
+# Create sf object from filtered data
+PM2.5_sf_August <- st_as_sf(PM2.5_August, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed_August <- st_transform(PM2.5_sf_August, crs = 3005)
+
+# Plot the map for August 1 only
+ggplot() +
+  geom_sf(data = healthha.sf, fill = "white", color = "black")  + geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), color = "magenta", alpha = 0.3) +
+  geom_sf(data = PM2.5_Transformed_August, 
+          aes(color = `PM2.5 (ug/m^3)`), 
+          size = 2) + scale_fill_manual(name = "", values = c("2023 Wildfire Boundaries" = "magenta")) +
+  scale_color_gradient(low = "yellow", high = "red", name = "PM2.5 (ug/m³)",
+                       limits = c(0, 65)) +
+  coord_sf() +
+  labs(title = "Average PM2.5 Concentration in August, 2023",
+       subtitle = "Points represent air quality data (PM2.5) overlaid on regional map")  +
+  theme_minimal() + #makes it so the grey background is absent, overall cleaner 
+   theme(legend.position = "right") + 
+  theme_minimal() + theme(legend.position = c(1.1, 0.6))
+
+#September---------------------------------------------------------------------------------------
+
+#Checking to see if the CRS is the same.
+st_crs(healthha.sf)  
+st_crs(PM2.5) 
+#They were not, thus we need to transform the air quality to the Albers BC projection.
+
+#First search and identify only September 1, 2023 dates.
+unique(PM2.5$Month)
+
+PM2.5$Month <- as.Date(PM2.5$Month, format = "%d-%b-%y")
+
+# Filter only for September 1, 2023
+PM2.5_September <- PM2.5 %>% filter(Month == as.Date("2023-09-01"))
+
+# Create sf object from filtered data
+PM2.5_sf_September <- st_as_sf(PM2.5_September, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed_September <- st_transform(PM2.5_sf_September, crs = 3005)
+
+# Plot the map for September 1 only
+ggplot() +
+  geom_sf(data = healthha.sf, fill = "white", color = "black")  + geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), color = "magenta", alpha = 0.3) +
+  geom_sf(data = PM2.5_Transformed_September, 
+          aes(color = `PM2.5 (ug/m^3)`), 
+          size = 2) + scale_fill_manual(name = "", values = c("2023 Wildfire Boundaries" = "magenta")) +
+  scale_color_gradient(low = "yellow", high = "red", name = "PM2.5 (ug/m³)",
+                       limits = c(0, 65)) +
+  coord_sf() +
+  labs(title = "Average PM2.5 Concentration in September, 2023",
+       subtitle = "Points represent air quality data (PM2.5) overlaid on regional map")  +
+  theme_minimal() + #makes it so the grey background is absent, overall cleaner 
+   theme(legend.position = "right") + 
+  theme_minimal() + theme(legend.position = c(1.1, 0.6))
+
+#October-----------------------------------------------------------------------------------------
+
+#Checking to see if the CRS is the same.
+st_crs(healthha.sf)  
+st_crs(PM2.5) 
+#They were not, thus we need to transform the air quality to the Albers BC projection.
+
+#First search and identify only October 1, 2023 dates.
+unique(PM2.5$Month)
+
+PM2.5$Month <- as.Date(PM2.5$Month, format = "%d-%b-%y")
+
+# Filter only for October 1, 2023
+PM2.5_October <- PM2.5 %>% filter(Month == as.Date("2023-10-01"))
+
+# Create sf object from filtered data
+PM2.5_sf_October <- st_as_sf(PM2.5_October, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed_October <- st_transform(PM2.5_sf_October, crs = 3005)
+
+# Plot the map for October 1 only
+ggplot() +
+  geom_sf(data = healthha.sf, fill = "white", color = "black")  + geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), color = "magenta", alpha = 0.3) +
+  geom_sf(data = PM2.5_Transformed_October, 
+          aes(color = `PM2.5 (ug/m^3)`), 
+          size = 2) + scale_fill_manual(name = "", values = c("2023 Wildfire Boundaries" = "magenta")) +
+  scale_color_gradient(low = "yellow", high = "red", name = "PM2.5 (ug/m³)",
+                       limits = c(0, 65)) +
+  coord_sf() +
+  labs(title = "Average PM2.5 Concentration in October, 2023",
+       subtitle = "Points represent air quality data (PM2.5) overlaid on regional map")  +
+  theme_minimal() + #makes it so the grey background is absent, overall cleaner 
+   theme(legend.position = "right") + 
+  theme_minimal() + theme(legend.position = c(1.1, 0.6))
+
+#November----------------------------------------------------------------------------------------
+
+#Checking to see if the CRS is the same.
+st_crs(healthha.sf)  
+st_crs(PM2.5) 
+#They were not, thus we need to transform the air quality to the Albers BC projection.
+
+#First search and identify only November 1, 2023 dates.
+unique(PM2.5$Month)
+
+PM2.5$Month <- as.Date(PM2.5$Month, format = "%d-%b-%y")
+
+# Filter only for November 1, 2023
+PM2.5_November <- PM2.5 %>% filter(Month == as.Date("2023-11-01"))
+
+# Create sf object from filtered data
+PM2.5_sf_November <- st_as_sf(PM2.5_November, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed_November <- st_transform(PM2.5_sf_November, crs = 3005)
+
+# Plot the map for November 1 only
+ggplot() +
+  geom_sf(data = healthha.sf, fill = "white", color = "black")  + geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), color = "magenta", alpha = 0.3) +
+  geom_sf(data = PM2.5_Transformed_November, 
+          aes(color = `PM2.5 (ug/m^3)`), 
+          size = 2) + scale_fill_manual(name = "", values = c("2023 Wildfire Boundaries" = "magenta")) +
+  scale_color_gradient(low = "yellow", high = "red", name = "PM2.5 (ug/m³)",
+                       limits = c(0, 65)) +
+  coord_sf() +
+  labs(title = "Average PM2.5 Concentration in November, 2023",
+       subtitle = "Points represent air quality data (PM2.5) overlaid on regional map")  +
+  theme_minimal() + #makes it so the grey background is absent, overall cleaner 
+   theme(legend.position = "right") + 
+  theme_minimal() + theme(legend.position = c(1.1, 0.6))
+
+#December----------------------------------------------------------------------------------------
+
+#Checking to see if the CRS is the same.
+st_crs(healthha.sf)  
+st_crs(PM2.5) 
+#They were not, thus we need to transform the air quality to the Albers BC projection.
+
+#First search and identify only December 1, 2023 dates.
+unique(PM2.5$Month)
+
+PM2.5$Month <- as.Date(PM2.5$Month, format = "%d-%b-%y")
+
+# Filter only for December 1, 2023
+PM2.5_December <- PM2.5 %>% filter(Month == as.Date("2023-12-01"))
+
+# Create sf object from filtered data
+PM2.5_sf_December <- st_as_sf(PM2.5_December, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed_December <- st_transform(PM2.5_sf_December, crs = 3005)
+
+# Plot the map for December only
+ggplot() +
+  geom_sf(data = healthha.sf, fill = "white", color = "black")  + geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), color = "magenta", alpha = 0.3) +
+  geom_sf(data = PM2.5_Transformed_December, 
+          aes(color = `PM2.5 (ug/m^3)`), 
+          size = 2) + scale_fill_manual(name = "", values = c("2023 Wildfire Boundaries" = "magenta")) +
+  scale_color_gradient(low = "yellow", high = "red", name = "PM2.5 (ug/m³)",
+                       limits = c(0, 65)) +
+  coord_sf() +
+  labs(title = "Average PM2.5 Concentration in December, 2023",
+       subtitle = "Points represent air quality data (PM2.5) overlaid on regional map")  +
+  theme_minimal() + #makes it so the grey background is absent, overall cleaner 
+   theme(legend.position = "right") + 
+  theme_minimal() + theme(legend.position = c(1.1, 0.6))
+```
+
+```{r - July to December - Kriged Raster Overlay of PM2.5 Data over British Columbia, include=FALSE}
+
+#July--------------------------------------------------------------------------------------------
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_July_Krige <- PM2.5_July %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25))
+
+# Create sf object
+PM2.5_sf_July_Krige <- st_as_sf(PM2.5_July_Krige, coords = c("Longitude", "Latitude"), crs = 4326)
+PM2.5_Transformed_July <- st_transform(PM2.5_sf_July_Krige, crs = st_crs(healthha.sf))
+
+
+# Convert to Spatial feature (SP)
+PM2.5_July_sp <- as(PM2.5_Transformed_July, "Spatial")
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_July_Model <- variogram(PM25 ~ 1, data = PM2.5_July_sp)
+
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_July_model <- fit.variogram(variogramPM2.5_July_Model, model = vgm("Sph", "Exp", "Gau"))
+
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the HA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5_July <- krige(PM25 ~ 1, PM2.5_July_sp, newdata = InterpolationGrid, model = fitted_PM2.5_July_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+July_raster_kriged <- rast(kriged_PM2.5_July["var1.pred"])
+
+#We need to actually mask or crop the raster to the HA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+July_Masked_Kriged_Raster_HA <- mask(July_raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_July_Raster_df <- as.data.frame(July_Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_July_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+JulyKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_July_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for July, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+
+#August------------------------------------------------------------------------------------------
+
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_August_Krige <- PM2.5_August %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25))
+
+# Create sf object
+PM2.5_sf_August_Krige <- st_as_sf(PM2.5_August_Krige, coords = c("Longitude", "Latitude"), crs = 4326)
+PM2.5_Transformed_August <- st_transform(PM2.5_sf_August_Krige, crs = st_crs(healthha.sf))
+
+
+# Convert to Spatial feature (SP)
+PM2.5_August_sp <- as(PM2.5_Transformed_August, "Spatial")
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_August_Model <- variogram(PM25 ~ 1, data = PM2.5_August_sp)
+
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_August_model <- fit.variogram(variogramPM2.5_August_Model, model = vgm("Sph", "Exp", "Gau"))
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the HA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5_August <- krige(PM25 ~ 1, PM2.5_August_sp, newdata = InterpolationGrid, model = fitted_PM2.5_August_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+August_raster_kriged <- rast(kriged_PM2.5_August["var1.pred"])
+
+#We need to actually mask or crop the raster to the HA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+August_Masked_Kriged_Raster_HA <- mask(August_raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_August_Raster_df <- as.data.frame(August_Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_August_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+AugustKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_August_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for August, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+#September---------------------------------------------------------------------------------------
+
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_September_Krige <- PM2.5_September %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25))
+
+# Create sf object
+PM2.5_sf_September_Krige <- st_as_sf(PM2.5_September_Krige, coords = c("Longitude", "Latitude"), crs = 4326)
+PM2.5_Transformed_September <- st_transform(PM2.5_sf_September_Krige, crs = st_crs(healthha.sf))
+
+
+# Convert to Spatial feature (SP)
+PM2.5_September_sp <- as(PM2.5_Transformed_September, "Spatial")
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_September_Model <- variogram(PM25 ~ 1, data = PM2.5_September_sp)
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_September_model <- fit.variogram(variogramPM2.5_September_Model, model = vgm("Sph", "Exp", "Gau"))
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the HA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5_September <- krige(PM25 ~ 1, PM2.5_September_sp, newdata = InterpolationGrid, model = fitted_PM2.5_September_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+September_raster_kriged <- rast(kriged_PM2.5_September["var1.pred"])
+
+#We need to actually mask or crop the raster to the HA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+September_Masked_Kriged_Raster_HA <- mask(September_raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_September_Raster_df <- as.data.frame(September_Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_September_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+SeptemberKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_September_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for September, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+
+#October-----------------------------------------------------------------------------------------
+
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_October_Krige <- PM2.5_October %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25))
+
+# Create sf object
+PM2.5_sf_October_Krige <- st_as_sf(PM2.5_October_Krige, coords = c("Longitude", "Latitude"), crs = 4326)
+PM2.5_Transformed_October <- st_transform(PM2.5_sf_October_Krige, crs = st_crs(healthha.sf))
+
+
+# Convert to Spatial feature (SP)
+PM2.5_October_sp <- as(PM2.5_Transformed_October, "Spatial")
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_October_Model <- variogram(PM25 ~ 1, data = PM2.5_October_sp)
+
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_October_model <- fit.variogram(variogramPM2.5_October_Model, model = vgm("Sph", "Exp", "Gau"))
+
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the HA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5_October <- krige(PM25 ~ 1, PM2.5_October_sp, newdata = InterpolationGrid, model = fitted_PM2.5_October_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+October_raster_kriged <- rast(kriged_PM2.5_October["var1.pred"])
+
+#We need to actually mask or crop the raster to the HA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+October_Masked_Kriged_Raster_HA <- mask(October_raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_October_Raster_df <- as.data.frame(October_Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_October_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+OctoberKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_October_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for October, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+
+#November----------------------------------------------------------------------------------------
+
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_November_Krige <- PM2.5_November %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25))
+
+# Create sf object
+PM2.5_sf_November_Krige <- st_as_sf(PM2.5_November_Krige, coords = c("Longitude", "Latitude"), crs = 4326)
+PM2.5_Transformed_November <- st_transform(PM2.5_sf_November_Krige, crs = st_crs(healthha.sf))
+
+
+# Convert to Spatial feature (SP)
+PM2.5_November_sp <- as(PM2.5_Transformed_November, "Spatial")
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_November_Model <- variogram(PM25 ~ 1, data = PM2.5_November_sp)
+
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_November_model <- fit.variogram(variogramPM2.5_November_Model, model = vgm("Sph", "Exp", "Gau"))
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the HA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5_November <- krige(PM25 ~ 1, PM2.5_November_sp, newdata = InterpolationGrid, model = fitted_PM2.5_November_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+November_raster_kriged <- rast(kriged_PM2.5_November["var1.pred"])
+
+#We need to actually mask or crop the raster to the HA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+November_Masked_Kriged_Raster_HA <- mask(November_raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_November_Raster_df <- as.data.frame(November_Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_November_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+NovemberKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_November_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for November, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+
+#December----------------------------------------------------------------------------------------
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_December_Krige <- PM2.5_December %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25))
+
+# Create sf object
+PM2.5_sf_December_Krige <- st_as_sf(PM2.5_December_Krige, coords = c("Longitude", "Latitude"), crs = 4326)
+PM2.5_Transformed_December <- st_transform(PM2.5_sf_December_Krige, crs = st_crs(healthha.sf))
+
+
+# Convert to Spatial feature (SP)
+PM2.5_December_sp <- as(PM2.5_Transformed_December, "Spatial")
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_December_Model <- variogram(PM25 ~ 1, data = PM2.5_December_sp)
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_December_model <- fit.variogram(variogramPM2.5_December_Model, model = vgm("Sph", "Exp", "Gau"))
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the LHA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5_December <- krige(PM25 ~ 1, PM2.5_December_sp, newdata = InterpolationGrid, model = fitted_PM2.5_December_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+December_raster_kriged <- rast(kriged_PM2.5_December["var1.pred"])
+
+#We need to actually mask or crop the raster to the LHA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+December_Masked_Kriged_Raster_HA <- mask(December_raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_December_Raster_df <- as.data.frame(December_Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_December_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+DecemberKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_December_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for December, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+
+```
+
+```{r Kriged Interpolation of PM2.5 over BC for entire 6 month period, include=FALSE}
+# Create sf object from filtered data
+PM2.5_sf <- st_as_sf(PM2.5, coords = c("Longitude", "Latitude"), crs = 4326)
+
+# Transform filtered data to BC Albers projection
+PM2.5_Transformed <- st_transform(PM2.5_sf, crs = 3005)
+
+#Rename the `PM2.5 (ug/m^3)` as simply PM25 to avoid issues involved with having periods and other symbols. Also the filter is used to remove any rows that have no values (NA) such as Vancouver Robson Square and Burnaby Mountain
+PM2.5_Krige <- PM2.5_Transformed %>%
+  rename(PM25 = `PM2.5 (ug/m^3)`) %>%
+  filter(!is.na(PM25)) 
+
+# Convert to Spatial feature (SP)
+PM2.5_sp <- as(PM2.5_Krige, "Spatial")
+
+PM2.5_sp <- remove.duplicates(PM2.5_sp)
+
+#Fit the variogram and kriged model using PM2.5 data, plot it to see what it looks like.
+variogramPM2.5_Model <- variogram(PM25 ~ 1, data = PM2.5_sp)
+
+#The Spherical Model is selected as the best fitting model. This is seen in the output from "fitted_PM2.5_model"
+fitted_PM2.5_model <- fit.variogram(variogramPM2.5_Model, model = vgm("Sph"))
+
+
+# Create a raster grid that covers BC's health regions, alternative method of doing this could be using the bbox, or bounding box and specifiying the mins and maxs directly from the min and max of the LHA SF (probabaly the better way).
+x_min <- 200000        
+x_max <- 2000000   
+y_min <- 100000        
+y_max <- 2100000
+#Grid Resolution
+GridResolution <- 5000 #5km
+
+# Using the sequence() function create a grid that has points that are a distance apart determined by the x and y min and max and the 5km resolution
+x_range <- seq(from = x_min, to = x_max, by = GridResolution)
+y_range <- seq(from = y_min, to = y_max, by = GridResolution)
+
+#Actually create the grid
+InterpolationGrid <- expand.grid(x = x_range, y = y_range)
+
+#And then create it as a spatial object
+
+coordinates(InterpolationGrid) <- ~ x + y
+gridded(InterpolationGrid) <- TRUE
+
+#We need to attach a CRS to the grid, the best way to do this that I found online was to use the proj4string or proj4 package. We can just attach the same CRS that the Local Health Area sf uses.
+
+proj4string(InterpolationGrid) <- CRS(st_crs(healthha.sf)$proj4string)
+
+#Based on the determined fitted model above, perform a Kriging.
+kriged_PM2.5 <- krige(PM25 ~ 1, PM2.5_sp, newdata = InterpolationGrid, model = fitted_PM2.5_model)
+
+#Convert the kriged result to a kriged raster based on the prediction variable.
+Raster_kriged <- rast(kriged_PM2.5["var1.pred"])
+
+#We need to actually mask or crop the raster to the LHA BC boundary
+
+#Merge the geometry from all of the health areas into one.
+BC_merged_HA <- st_union(healthha.sf)
+
+#Turn the merged HA geometry into a Spatial SP Feature
+BC_merged_HA_sp <- as(BC_merged_HA, "Spatial")
+
+#Mask the kriged raster interpolation onto the merged British Columbia HA Spatial Feature.
+Masked_Kriged_Raster_HA <- mask(Raster_kriged, vect(BC_merged_HA_sp))
+
+#We need to convert the raster back into a dataframe in order to plot it with ggplot.
+Kriged_Raster_df <- as.data.frame(Masked_Kriged_Raster_HA, xy = TRUE)
+colnames(Kriged_Raster_df)[3] <- "PM2.5"
+
+#Finally we can plot the kriged interpolated PM2.5 Air Quality Data over the province.
+AllKrigePlot <- ggplot() +
+  geom_raster(data = Kriged_Raster_df, aes(x = x, y = y, fill = PM2.5)) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) + geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) + scale_color_manual(values = c("2023 Wildfire Boundaries" = "magenta"), 
+                     name = NULL) +
+  scale_fill_gradientn(colors = c("green", "yellow", "orange", "red", "darkred"),
+                       name = "PM2.5 (ug/m³)",
+                       limit = c(0,65)) +
+  coord_sf(crs = st_crs(healthha.sf)) +
+  labs(title = "Kriging Interpolation of PM2.5 for July-December, 2023",
+       subtitle = "Interpolated PM2.5 surface over BC health regions") +
+  theme_minimal() + theme(legend.position = c(1.1, 0.65))
+
+AllKrigePlot
+```
+
+```{r - Add Health Data to Health Area Map of BC, include=FALSE}
+#July-------------------------------------------------------------------------------------------
+HealthData <-read.csv(glue::glue(here::here(), "/data/HealthData.csv"))
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+HealthHA_merged_July <- filter(HealthHA_merged, Date == as.Date("2023-07-01"))
+
+JulyHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_July, aes(fill = `Proportion.of.Visit....`), color = "black") +
+
+  # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Proportion of Visits (%) in July, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+
+#August-----------------------------------------------------------------------------------------
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+HealthHA_merged_August <- filter(HealthHA_merged, Date == as.Date("2023-08-01"))
+
+AugustHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_August, aes(fill = `Proportion.of.Visit....`), color = "black") +
+
+  # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Proportion of Visits (%) in August, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+
+#September--------------------------------------------------------------------------------------
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+HealthHA_merged_September <- filter(HealthHA_merged, Date == as.Date("2023-09-01"))
+
+SeptemberHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_September, aes(fill = `Proportion.of.Visit....`), color = "black") +
+
+  # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Proportion of Visits (%) in September, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+
+#October----------------------------------------------------------------------------------------
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+HealthHA_merged_October <- filter(HealthHA_merged, Date == as.Date("2023-10-01"))
+
+OctoberHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_October, aes(fill = `Proportion.of.Visit....`), color = "black") +
+
+  # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Proportion of Visits (%) in October, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+
+#November---------------------------------------------------------------------------------------
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+HealthHA_merged_November <- filter(HealthHA_merged, Date == as.Date("2023-11-01"))
+
+NovemberHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_November, aes(fill = `Proportion.of.Visit....`), color = "black") +
+
+  # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Proportion of Visits (%) in November, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+
+#December---------------------------------------------------------------------------------------
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+HealthHA_merged_December <- filter(HealthHA_merged, Date == as.Date("2023-12-01"))
+
+DecemberHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_December, aes(fill = `Proportion.of.Visit....`), color = "black") +
+
+ # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Proportion of Visits (%) in December, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+```
+
+```{r Health Data to Health Area Map of BC over 6 Month Period (July-December), include=FALSE}
+
+unique(healthha.sf$OBJECTID)
+str(healthha.sf$OBJECTID)
+
+HealthData$OBJECTID <- as.numeric(HealthData$OBJECTID)
+healthha.sf$OBJECTID <- as.numeric(healthha.sf$OBJECTID)
+
+HealthHA_merged <- left_join(healthha.sf, HealthData, by = "OBJECTID")
+
+HealthHA_merged$Date <- as.Date(HealthHA_merged$Date)
+
+HealthHA_merged_AVG <- HealthHA_merged %>% group_by(Health.Area.Name) %>%             summarise(Average_Proportion = mean(`Proportion.of.Visit....`, na.rm = TRUE), .groups = 'drop')
+
+
+AllHealthDataPlot <- ggplot() +
+  # Choropleth map of health areas coloured by the Proportion of Visits (%)
+  geom_sf(data = HealthHA_merged_AVG, aes(fill = `Average_Proportion`), color = "black") +
+
+  # Wildfire boundaries on top of the map.
+  geom_sf(data = Fires_polygons, aes(color = "2023 Wildfire Boundaries"), fill = NA, alpha = 0.3) +
+
+  # Color scale for Proportion of Visit (%)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Proportion of Visit (%)",
+                      limits = c(0, 8), na.value = "grey90") +
+  # Manual scale for wildfire color legend
+  scale_color_manual(values = c("2023 Wildfire Boundaries" = "blue"), name = NULL) +
+  coord_sf() +
+  labs(
+    title = "Average Proportion of Visits (%) from July-December, 2023",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundaries"
+  ) +
+  theme_minimal() +
+  theme(legend.position = c(1.1, 0.6))
+```
+
+```{r Kriged Plotted as one, include=FALSE}
+JulyKrigePlot <- JulyKrigePlot +
+  labs(title = "July, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+AugustKrigePlot <- AugustKrigePlot +
+  labs(title = "August, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+SeptemberKrigePlot <- SeptemberKrigePlot +
+  labs(title = "September, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+OctoberKrigePlot <- OctoberKrigePlot +
+  labs(title = "October, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+NovemberKrigePlot <- NovemberKrigePlot +
+  labs(title = "November, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+DecemberKrigePlot <- DecemberKrigePlot +
+  labs(title = "December, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+combined_PM25_plot <- (
+  JulyKrigePlot     + theme(legend.position = "none") |
+  AugustKrigePlot   + theme(legend.position = "none") |
+  SeptemberKrigePlot+ theme(legend.position = "none")
+) /
+(
+  OctoberKrigePlot  + theme(legend.position = "none") |
+  NovemberKrigePlot + theme(legend.position = "none") |
+  DecemberKrigePlot
+) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "right")
+
+final_Interpolated_plot <- combined_PM25_plot +
+  plot_annotation(
+    title = "Monthly Kriging Interpolation of PM2.5 (July–December 2023)",
+    subtitle = "Interpolated PM2.5 surface over BC health regions")
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5))
+
+final_Interpolated_plot
+
+
+
+```
+
+```{r HealthData Plotted as one, include=FALSE}
+JulyHealthDataPlot <- JulyHealthDataPlot +
+  labs(title = "July, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+AugustHealthDataPlot <- AugustHealthDataPlot +
+  labs(title = "August, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+SeptemberHealthDataPlot <- SeptemberHealthDataPlot +
+  labs(title = "September, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+OctoberHealthDataPlot <- OctoberHealthDataPlot +
+  labs(title = "October, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+NovemberHealthDataPlot <- NovemberHealthDataPlot +
+  labs(title = "November, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+DecemberHealthDataPlot <- DecemberHealthDataPlot +
+  labs(title = "December, 2023", subtitle = NULL) +
+  theme(plot.title = element_text(hjust = 0.5, size = 10))
+
+combined_HealthData_plot <- (
+  JulyHealthDataPlot     + theme(legend.position = "none") |
+  AugustHealthDataPlot   + theme(legend.position = "none") |
+  SeptemberHealthDataPlot+ theme(legend.position = "none")
+) /
+(
+  OctoberHealthDataPlot  + theme(legend.position = "none") |
+  NovemberHealthDataPlot + theme(legend.position = "none") |
+  DecemberHealthDataPlot
+) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "right")
+
+final_HealthData_Chloropleth_plot <- combined_HealthData_plot +
+  plot_annotation(
+    title = "Average Proportion of Visits (%) from July-December, 2023 for BC Health Regions",
+    subtitle = "Health units shaded by Proportion of Visits (%), overlaid with 2023 wildfire boundariess")
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5))
+
+final_HealthData_Chloropleth_plot
+```
+
+
+```{r Linear Regression of Health Data against PM2.5, include=FALSE}
+
+#Thanks to Dr. Paez for helping with this code!
+Kriged_Raster_sf <- st_as_sf(Kriged_Raster_df, coords = c("x", "y"), crs = 3005)
+
+Joined_Kriged_Health <- st_join(Kriged_Raster_sf, HealthHA_merged, join = st_intersects)
+
+Averaged_Krige_Health <- Joined_Kriged_Health %>%
+  group_by(OBJECTID) %>%
+  summarise(mean_kriged = mean(`PM2.5`, na.rm = TRUE), avg_proportion = mean(`Proportion.of.Visit....`, na.rm = TRUE),.groups = 'drop')
+
+Averaged_Krige_Health <- Averaged_Krige_Health[-6, ]
+
+#Run the Linear Regression of Average Proportion of Visits against the Average Kriged Interpolated PM2.5 Values.
+
+ProportionofVisits_vs_PM2.5 <- lm(avg_proportion ~ mean_kriged, data = Averaged_Krige_Health)
+summary(ProportionofVisits_vs_PM2.5)
+
+# Merging the residuals
+Averaged_Krige_Health$ProportionofVisits_vs_PM2.5.e <- ProportionofVisits_vs_PM2.5$residuals
+
+#Plotting the residuals
+PlottedResiduals<- ggplot(Averaged_Krige_Health) +
+  geom_sf(aes(fill = ifelse(ProportionofVisits_vs_PM2.5.e > 0, "Positive", "Negative")),
+          color = "black") +
+  scale_fill_manual(values = c("Positive" = "red", "Negative" = "dodgerblue4")) +
+  labs(title = "Regression Residuals: PM2.5 vs Proportion of Visits",
+       fill = "Residual Sign") +
+  theme_minimal()
+PlottedResiduals
+```
+
+```{r Resdiuals of the Health Data against PM2.5, include=FALSE}
+ResidualsPlot <- ggplot() +
+  geom_sf(data = Averaged_Krige_Health, aes(color = ProportionofVisits_vs_PM2.5.e)) +
+  geom_sf(data = Fires_polygons, aes(fill = "2023 Wildfire Boundaries"), 
+          color = "blue", fill = NA, alpha = 0.6, show.legend = TRUE) +
+  geom_sf(data = healthha.sf, fill = NA, color = "black", size = 0.5) +
+  scale_color_gradient2(low = "yellow",
+                        mid = "orange",
+                        high = "red", 
+                        midpoint = 0, 
+                        name = "Residuals") +
+  coord_sf() +
+  theme_minimal()
+
+```
+
+
+
+<!--This create a page break, i.e., starts a new page-->
+<!--\newpage-->
+
+
+<!--Use "#" for section headers-->
+
+
+# Introduction
+  As the rate and intensity of wildfires is at an all-time high and only expected to worsen due to the progression of climate change, there becomes a growing necessity to protect the health of those who live in areas especially prone to such disasters, like British Colombia. The ash and debris released during wildfires is transported through the air and inhaled by humans, including the most concerning PM2.5 particulate matter which can lead to various respiratory ailments and even death (Human health effects of wildfire smoke report summary, Health Canada, 2024). The province experienced their worst wildfire season yet in 2023 (Jain et al., 2024), which was chosen as the temporal scope of our study. Knowing how, where, and when populations will be most impacted by wildfire smoke could be extremely useful for hospitals and citizens to prepare, and our study aims to contribute to this knowledge. This study attempts to first visualize and interpolate the July-December 2023 data PM2.5 air quality contamination and proportion of respiratory illness related physician visits across British Colombia. The two parameters are compared, and their correlation is examined to better understand the magnitude and function of their spatial relationship.
+
+# Background
+  Wildfires in Canada have had massive impacts on the mental and physical wellbeing of those affected (Lowe & Garfin, 2023). These widespread wildfires are a massive source of smoke leading to increased air pollution and high concentrations of PM2.5 in the atmosphere. Studies such as air quality modelling and in-situ measurements have been conducted and have shown that the inhalation of PM2.5 particulates is associated with increased premature mortality and various other cardiorespiratory health problems (Matz et al., 2020). Additionally, the wildfires have been very expensive, costing Canadians between “CAD 410 million to CAD 1.8 billion for short-term health effects and as much as CAD 4.3 billion to  CAD 19 billion for long-term health effects” (Human health effects of wildfire smoke report summary, Health Canada, 2024). According to Health Canada, there are up to 250 wildfire related deaths due to short-term particulate exposure, and up to 2,500 deaths from long term exposure (Human health effects of wildfire smoke report summary, Health Canada, 2024).   
+
+  The increasing frequency of wildfires in Canada is becoming extremely worrying and is affecting the mental health of Canadians, largely causing anxiety among the younger populations, while also affecting the physical health of all who live in areas where smoke reaches (Eisenman & Galway, 2022). This is becoming very problematic, as the intensity and frequency of wildfires is not going to slow down (Wasserman & Mueller, 2023). Our research hopes to highlight the correlation between spatial proximity/exposure to wildfires represented by areas of increased PM2.5 air quality contamination and the relative magnitude of health problems faced, focused on cardiorespiratory-related health clinic visits (Austin, 2023).    
+
+  Current research has shown that there is a strong correlation between proximity to wildfires and increased health and cardiovascular problems (Douglas-Vail et al., 2023). These factors will be further analyzed with a focus on the province of British Columbia to determine if this spatial relationship can be statistically seen through linear regression analysis of PM2.5 air quality concentration against health visit data. This analysis is being done to see if there are ways in-directly measure the effects (direct measurement would be health data against fire location). This study will be very significant as the expected amounts of large- and small-scale wildfires are expected to increase as the effects of climate change are continuing to be more expressed (Grant & Runkle, 2022). This research will allow physicians, climate scientists and other researchers to work together to try to reduce the amounts of wildfires, minimize the harmful health effects and make sure the spatial relationship is more well understood for future preventative measures (Grant & Runkle, 2022). 
+
+# Study area
+  This research focused on British Columbia (BC), Canada, a region with long, hot, dry summer and large forest cover.  
+
+  During the 2023 wildfire season, a total of 2245 wildfires occurred, more than 2.84 million hectares of land were burned. 72% of the wildfires in 2023 were due to natural causes, and around 25% were caused by human activities. Wildfires concentrated in central and northwest BC, but the impact of these wildfires spread to the entire province, including urban areas such as Vancouver. 
+  
+  
+```{r, echo=FALSE}
+plot(st_geometry(healthha.sf))
+```
+
+Figure 1: Health Regions and Provincial outline of British Columbia, Canada 
+
+
+# Data
+# 1. Wildfire Data 
+
+  Wildfire Data were acquired from Open Canada Portal, in the format of .kmz file. It showed the boundaries of wildfires. By overlaying wildfire boundaries to air pollution and health data maps, we can visually examine possible relationships among wildfire, air quality and healthcare utilization. 
+
+# 2. Air Quality Data 
+
+  We used monthly measurements of air quality from The British Columbia Air Data Archive. Our primary focus was on PM2.5(particulate matter with diameter $\le$ 2.5um). These datasets contain PM2.5 values such as average, corresponding date, time etc. for different air quality monitoring stations. PM2.5 data were interpolated to create continuous surface of air quality for each month from July to September 2023. This approach produced predictions of PM2.5 levels in areas without air quality monitoring stations. 
+
+# 3. Health Utilization Data 
+
+  Health-related data were from Health Canada and Healthideas (Ministry of Health). These datasets include age groups, number of cases related to respiratory diseases, number of hospital visits, population etc. 
+
+# Methods
+
+  The methods used in this report involved retrieving PM2.5 air quality data from the British Columbia Air Data Archive and compiling a CSV containing Station Name, Longitude, Latitude, Month, and PM2.5 concentrations. Latitude and Longitude data had to be separately georeferenced, using the British Columbia Air Data Archive location and Google Earth to view coordinate values. Data was then imported into R using the read.csv() function, and the header names were reformatted to allow them to be easily used in further functions. The initial step was to sort through the two datasets to find the highest and lowest concentrations of PM2.5, that would be used for plotting. Using a pipe operator, any non-values were filtered out, and the data from the same data at every station was averaged. The outputs showed that PM2.5 peaked in July-August 2023 and decreased towards the winter months. Based on this info it was determined that the best 6-month period to plot was from July to December of 2023.   
+
+  To plot the air quality data as a raster surface over the entire province of British Columbia, an interpolation using the Kriging method was used as this method allows for the most accurate and least unbiased interpolation. To perform this step, a long coding process involving the creation of sf and sp features, verifying coordinate systems, creating variograms and fitting them to the best models, creating a raster grid over the provincial polygon, and performing the actual Kriging process was done. This resulted in the creation of 6 separate interpolated maps of BC for the months of interest. These 6 maps were then plotted together to show the time series analysis of PM2.5 concentrations. Another interpolation was also done using the air quality data from every month, to create an average interpolation of the air quality in BC for the 6-month study period. Geometries of the wildfire boundaries in 2023 were overlaid on every map.  
+
+  For the health data analysis, 6 choropleth maps were created that plotted the proportion of health clinic visits (%) for cardiorespiratory-related reasons for the five provincial health regions (Northern, Interior, Fraser, Vancouver Coastal, and Vancouver Island). This was also performed in R by merging a CSV file containing the health data with the data frame in R containing the polygon geometry features corresponding to the health regions. Merging the two data sets by a unique ID code allowed for the easy plotting of region-based health data in defined zones in BC. Similarly to the Interpolated PM2.5 data, these 6 maps were then plotted together to show the time series analysis of health visit proportions. As well as a choropleth map containing the data for all 6 months to show the average health clinic visits (%) in BC for the 6-month study period.  Geometries of the wildfire boundaries in 2023 were overlaid on every map.  
+  
+  The last map was created using the residuals from the linear regression in the previous plot. The interpolated map of the air quality data (which used the Kriging Method) and the Health Data was the basis for the data which the residuals were derived from. This data was overlaid the wildfire boundary layer both as sf-objects. To get a clear representation of where residuals were highest and lowest, a scale colour gradient was added, where low residuals were yellow, mid-range was classed as orange, and high residuals were red.  
+
+  The last step statistical method that was performed was a linear regression of the Health Data against the PM2.5 air quality data. This was performed in R, by originally merging the 6-month krige interpolation data with the mean health data from all 6 months. They were merged by a unique ID corresponding to the health region zone. This resulted in a datagram consisting of the meant 6-month interpolated PM2.5 data for each zone, as well as the mean proportion of health clinic visits for each zone. Thus, there were 5 data points for PM2.5 and 5 data points for the health data. The linear regression of the Average Proportion of Health Clinic Visits against the Mean Interpolated PM2.5 Air Quality Data was then performed. 
+
+# Results
+
+```{r, echo=FALSE}
+final_Interpolated_plot
+```
+
+Figure 2: Average Monthly Kriging Interpolation of PM2.5 Air Quality Concentrations over BC Health Regions showing a temporal progression from July to December 2023. 
+
+```{r, echo=FALSE}
+AllKrigePlot
+```
+
+Figure 3: Kriging Interpolation of PM2.5 Air Quality Concentrations over BC Health Regions showing average between July to December 2023. 
+
+```{r, echo=FALSE}
+final_HealthData_Chloropleth_plot
+```
+
+Figure 4: Average Monthly Proportion of Health Clinic Visits for BC Health Regions showing a temporal progression from July to December 2023. 
+
+```{r, echo=FALSE}
+AllHealthDataPlot
+```
+
+Figure 5: Proportion of Health Clinic Visits for BC Health Regions showing average between July to December 2023. 
+
+```{r, echo=FALSE}
+ResidualsPlot
+```
+Figure 6: Residuals of the Health Data against PM2.5
+
+
+| Metric                  | Value            |
+|-------------------------|------------------|
+| Residual Std. Error     | 0.9887 (df = 3)  |
+| Multiple R-squared      | 0.04691          |
+| Adjusted R-squared      | -0.2708          |
+| F-statistic             | 0.1476 (1, 3 df) |
+| p-value (overall model) | 0.7264           |
+
+Table 1: Output from Average Proportion of Health Clinic Visits against Mean Interpolated PM2.5 Air Quality Data Linear Regression. 
+
+# Analysis
+
+  The percentage of respiratory-related clinic and ambulatory visits throughout BC’s five health areas was compared with the interpolated PM2.5 air quality data to examine the relationship between wildfire-related air pollution and respiratory health issues.  The datasets were averaged over a six-month period to identify spatial and temporal trends.   
+
+  The Kriging-interpolated PM2.5 concentrations for every month from July to December 2023 are presented in Figure 2. There is a distinct temporal progression in these maps. PM2.5 levels are considerably higher in the Interior and Northern health zones in July and August. This coincides with when wildfire activity is at its highest. In the months leading up to winter, concentration progressively decreases. Most of the province has comparatively low PM2.5 levels by December. Given that areas like Vancouver Island and Vancouver Coastal continuously displayed the lowest amounts across the period, the spatial distribution indicates that inner city regions were more impacted than coastal ones.  
+
+  The Kriging-interpolated PM2.5 averaged over the period of July to December 2023 are shown in Figure 3. The average concentration is higher in the Southeastern and Northeastern regions, while Vancouver Island and the coastal regions have lower averages. This is in alignment with the monthly trends in Figure 2, suggesting that the interior regions of the province experience worse air quality during the wildfire season. 
+
+  Figure 4 displays the average proportion of visits in each region for each month from July to December. This series of maps show the increase in visits to healthcare clinics over time, peaking in December. This peak is likely explained by the normal spike in viral illnesses caused by flu season, however the variation between regions could be related to the PM2.5 trends. As seen in the December map, the proportion of visits is highest in the Northern, Fraser and Interior regions which are nearby or west of the wildfire boundaries and PM2.5 as seen in figure 3. 
+
+  In Figure 5, the average proportion of visits over the July to December 2023 period shows a greater average in the Fraser, Northern and Vancouver Coastal regions, while Vancouver Island has the lowest. There is not a significant spatial trend across this time period.  The lack of spatial trend from July to December could be attributed to the influence of the high monthly proportion of visits found in December 2023 which could have skewed the merged datasets. 
+
+  A linear regression was performed to further examine whether the observed patterns between air population and health visits were statistically significant. With an R-squared value of 0.04691, PM2.5 levels only account for approximately 4.7% of the variation in health clinic visits.  The adjusted R-squared value was negative (-0.2708), which accounts for the sample size (5 in this case). When the model's adjusted R-squared value is negative, it usually means that the model performs worse than merely averaging the health data without taking PM2.5 into account. The F-statistic is 0.1467 with a p-value of 0.7264. The p-value in this regression indicates whether there is a statistically significant relationship between the variables. With a p-value this high (higher than the typical 0.05 cutoff), we cannot say the relationship is significant.  
+
+  The model only included five points in the sample size, one for each health region, which is a major contributing factor to this result. The model's limited statistical power at this low observation count makes it extremely challenging to identify any significant impacts. Standard errors of the regression estimation increase, making the test less sensitive and the model more susceptible to random variations. The model would have more degrees of freedom and smaller confidence intervals if the sample size were larger. This would increase the likelihood of identifying a statistically significant relationship, assuming one exists. Other factors, such as age, population density, or access to care, could also be included in a bigger sample, which could further help in accurately describing the variation in the health data.  
+  
+  Figure 6 displays a map with the distinctive health areas colored by the range of residuals from 1 to -1. This map is supported by the linear regression, which has already been identified as having potential issues with its diminished statistical power due to its meager sample size. In the Interior and Northern regions, the residuals value is closer to 0, implying a closer fit to the model, whereas the Vancouver Island and Fraser regions have the greatest variation from 0, suggesting and  over-prediction/under-prediction of the model for these regions (respectively). It is possible that the residuals are nearer to 0 in the Interior and Northern reasons because these regions were closest to the wildfire boundaries and have the greatest PM2.5 levels (Figure 3), so there is a stronger connection between PM2.5 and negative health effects. The regional variability in the residuals could be a explanatory factor to the low R-squared value for the linear regression (see Table 1). 
+
+  Our initial hypothesis is still supported by the spatial and temporal trends, despite the regression's inability to give a statistically significant result. Higher rates of respiratory-related clinic visits were also observed in the areas with higher PM2.5 concentrations, especially during the summer months when wildfires were more common. The PM2.5 and health maps' strong visual alignment indicate a possible relationship, but the small sample size prevented a statistically significant conclusion.  
+
+# Conclusion
+
+  The goal of this study was to investigate the possible connection between wildfire intensity, PM2.5 air concentrations, and respiratory clinic visits in British Columbia during one of its worst wildfire seasons in 2023 (Jain et al, 2024). Methods such as Kriging Interpolation and Point Pattern Analysis were used to determine the connection between PM 2.5 concentrations and wildfire boundaries. These results were then compared with the average health clinic visits over the course of the study period. Despite research efforts the final analysis, which used linear regression, could not determine a significant relationship between the variables. This was most likely caused by the relatively small dataset that only included the five health authorities of British Columbia. Even though there was a lack of confirmation, spatial and temporal trends indicate that there may have been a connection. Regions impacted by the full force of the wildfire season displayed high concentrations of PM2.5 and more clinic visits. In contrast, regions like Vancouver Island that experienced a much less intense wildfire season displayed lower concentration levels of PM2.5 and fewer clinic visits over the studied period.  
+
+  The patterns displayed by the spatial and temporal data suggest that there is a potential connection, but a larger data set and additional research is needed. Further research is encouraged to use highly detailed data that covers smaller time intervals like weekly or daily records. Also, the inclusion of additional data such as age, population density, and access to care may strengthen this argument. Furthermore, early contact with health authorities is needed for the use of more specific health records that would allow future investigations to accurately display the correct number of respiratory-related clinic visits.
+
+# References
+Austin, S. (2023, July 27). Canada lacks data on wildfire smoke and minority health. The Narwhal. https://thenarwhal.ca/wildfire-smoke-health-impact-minority-communities/  
+
+BC Centre for Disease Control. (2025). Health Care Visits for Respiratory Illness: Primary care visits for respiratory illness. https://bccdc.shinyapps.io/respiratory_syndromic/ 
+
+British Colombia Ministry of Environment. (2023). BC Air Data Archive Website. https://envistaweb.env.gov.bc.ca/ 	 
+
+Douglas-Vail, M., Jiang, A., Erdelyi, S., Brubacher, J. R., & Abu-Laban, R. B. (2023). Association of air quality during forest fire season with respiratory emergency department visits in Vancouver, British Columbia. The Journal of Climate Change and Health, 13, 100255. https://doi.org/10.1016/j.joclim.2023.100255   
+
+Eisenman, D. P., & Galway, L. P. (2022). The Mental Health and well-being effects of wildfire smoke: A scoping review. BMC Public Health, 22(1). https://doi.org/10.1186/s12889-022-14662-z   
+
+Grant, E., & Runkle, J. D. (2022). Long-term health effects of wildfire exposure: A scoping review. The Journal of Climate Change and Health, 6, 100110. https://doi.org/10.1016/j.joclim.2021.100110   
+
+Government of Canada. (2025). BC Wildfire Fire Perimeters – Historical. Canada.ca. Government of British Columbia; Government of British Columbia; BC Wildfire Service. https://open.canada.ca/data/en/dataset/22c7cb44-1463-48f7-8e47-88857f207702 
+
+Health Canada/Government of Canada. (2024a, June 6). Human health effects of wildfire smoke report summary. Canada.ca. https://www.canada.ca/en/services/health/healthy-living/environment/air-quality/wildfire-smoke/human-health-effects-report-summary.html   
+
+Jain, P., Barber, Q. E., Taylor, S. W., Whitman, E., Castellanos Acuna, D., Boulanger, Y., Chavardès, R. D., Chen, J., Englefield, P., Flannigan, M., Girardin, M. P., Hanes, C. C., Little, J., Morrison, K., Skakun, R. S., Thompson, D. K., Wang, X., & Parisien, M.-A. (2024). Drivers and Impacts of the Record-Breaking 2023 Wildfire Season in Canada. Nature Communications, 15(1), 6764–14. https://doi.org/10.1038/s41467-024-51154-7   
+
+Lowe, S. R., & Garfin, D. R. (2023). Crisis in the air: The mental health implications of the 2023 Canadian wildfires. The Lancet Planetary Health, 7(9). https://doi.org/10.1016/s2542-5196(23)00188-2  
+
+Matz, C. J., Egyed, M., Xi, G., Racine, J., Pavlovic, R., Rittmaster, R., Henderson, S. B., Stieb, D. M. (2020). Health impact analysis of PM2.5 from wildfire smoke in Canada (2013–2015, 2017–2018). Science of The Total Environment, 725, 138506. https://doi.org/10.1016/j.scitotenv.2020.138506 
+
+Teucher A., Albers, S., Hazlitt, S., Province of British Colombia. bcmaps: Map Layers and Spatial Utilities for British Columbia, The Comprehensive R Archive Network. https://cran.r-project.org/web/packages/bcmaps/ 
+
+Wasserman, T. N., & Mueller, S. E. (2023). Climate influences on future fire severity: A synthesis of climate-fire interactions and impacts on fire regimes, high-severity fire, and forests in the Western United States. Fire Ecology, 19(1). https://doi.org/10.1186/s42408-023-00200-8 
+
